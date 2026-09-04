@@ -39,7 +39,7 @@ These are arbitrary model units, not dollars, tokens, or empirical welfare estim
 - Provider breach propensities persist within a run; the uniform_reliability control removes heterogeneity. Identity resets erase public history but preserve latent propensity.
 - Policies are fixed rules. No language models, strategic learning, voluntary institutional choice, or conscious populations are instantiated.
 - Failure events are exogenous. An adaptive attacker may react to policy; this replay cannot measure that.
-- Scope checks have known false negatives but no false positives; repair diagnoses have false negatives but no false positives. Both assumptions favor the corresponding interventions.
+- This baseline sets false_positive_rate to zero. The separate robustness study varies false positives; see studies/ROBUSTNESS_PLAN.md.
 - Commitments currently add cost only. Their independent benefit is unmodeled, so this is not a test of commitment semantics.
 - Reputation uses provider identity and bounded exclusion. There is no authenticated identity, decentralization, insolvency, restitution transfer, or enforcement model.
 - Parameter regimes are illustrative stress cases, not a representative sample of future environments.

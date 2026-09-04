@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use this software, cite the tagged version and describe its synthetic-model limitations."
+title: "Coordination Repair Lab"
+authors:
+  - name: "Coordination Repair Lab contributors"
+version: 0.2.0
+date-released: 2026-09-04
+url: "https://github.com/melissagrail/coordination-repair-lab"
+repository-code: "https://github.com/melissagrail/coordination-repair-lab"
+license: MIT
+type: software
+abstract: "A reproducible synthetic study of verification, trust, repair, exclusion, and third-party costs, including imperfect evidence and independent analytic controls. Not an empirical agent benchmark or alignment claim."
+keywords:
+  - cooperation
+  - reproducibility
+  - simulation
+  - imperfect evidence

@@ -12,7 +12,7 @@ import random
 import statistics
 import sys
 
-VERSION = '0.1.0'
+VERSION = '0.2.0'
 
 
 @dataclass(frozen=True)
@@ -35,6 +35,7 @@ class Config:
     externality_rate: float = 0.03
     identity_reset_rate: float = 0.0
     evidence_accuracy: float = 0.95
+    false_positive_rate: float = 0.0
     repair_success: float = 0.8
     audit_rate: float = 0.1
     successes_to_trust: int = 3
@@ -70,6 +71,23 @@ class Event:
     audit_draw: float
     evidence_draw: float
     repair_draw: float
+    verification_false_draw: float = 0.5
+    scope_false_draw: float = 0.5
+    diagnosis_false_draw: float = 0.5
+
+    def __post_init__(self):
+        if type(self.provider) is not int or self.provider < 0:
+            raise ValueError('event provider must be a nonnegative integer')
+        if self.failure not in ('none', 'accident', 'breach'):
+            raise ValueError('invalid event failure')
+        for name in ('allegation', 'externality', 'reset'):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f'{name} must be boolean')
+        for name in ('audit_draw', 'evidence_draw', 'repair_draw', 'verification_false_draw',
+                     'scope_false_draw', 'diagnosis_false_draw'):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= 1:
+                raise ValueError(f'{name} must be finite and in [0, 1]')
 
 
 @dataclass(frozen=True)
@@ -106,6 +124,7 @@ class State:
 def make_tape(config: Config, seed: int) -> tuple[Event, ...]:
     """Pre-sample every exogenous event before any policy runs."""
     rng = random.Random(seed)
+    false_rng = random.Random(f'false-positives-v1:{seed}')
     multipliers = [config.unreliable_multiplier if rng.random() < config.unreliable_fraction else 1.0
                    for _ in range(config.providers)]
     events = []
@@ -119,7 +138,8 @@ def make_tape(config: Config, seed: int) -> tuple[Event, ...]:
         events.append(Event(provider, failure, rng.random() < config.allegation_rate,
                             rng.random() < config.externality_rate,
                             rng.random() < config.identity_reset_rate,
-                            rng.random(), rng.random(), rng.random()))
+                            rng.random(), rng.random(), rng.random(),
+                            false_rng.random(), false_rng.random(), false_rng.random()))
     return tuple(events)
 
 
@@ -134,7 +154,8 @@ def simulate(config: Config, tape: tuple[Event, ...], policy: Policy) -> dict:
     states = [State() for _ in range(config.providers)]
     m = dict(completed=0, attempted=0, failures=0, prevented_breaches=0,
              exclusions=0, false_exclusions=0, scope_declines=0, repairs=0,
-             appeals=0, verifications=0, resets=0, gross_benefit=0.0,
+             appeals=0, verifications=0, resets=0, false_rejections=0,
+             false_scope_declines=0, wasted_retries=0, gross_benefit=0.0,
              production_cost=0.0, verification_cost=0.0, commitment_cost=0.0,
              appeal_cost=0.0, repair_cost=0.0, scope_cost=0.0, third_party_harm=0.0)
     for e in tape:
@@ -165,8 +186,11 @@ def simulate(config: Config, tape: tuple[Event, ...], policy: Policy) -> dict:
             continue
         if policy.scope:
             m['scope_cost'] += config.scope_cost
-            if e.externality and accurate:
+            flagged = accurate if e.externality else e.scope_false_draw < config.false_positive_rate
+            if flagged:
                 m['scope_declines'] += 1
+                if not e.externality:
+                    m['false_scope_declines'] += 1
                 continue
         verify = policy.verify_all or (policy.reputation and
                  (s.successes < config.successes_to_trust or e.audit_draw < config.audit_rate))
@@ -175,9 +199,13 @@ def simulate(config: Config, tape: tuple[Event, ...], policy: Policy) -> dict:
             m['verification_cost'] += config.verification_cost
         if policy.commitments:
             m['commitment_cost'] += config.commitment_cost
-        # Verification can reject a detectable breach before spending production resources.
-        if verify and e.failure == 'breach' and accurate:
-            m['prevented_breaches'] += 1
+        # A paid check can also wrongly reject a non-breach.
+        flagged = accurate if e.failure == 'breach' else e.verification_false_draw < config.false_positive_rate
+        if verify and flagged:
+            if e.failure == 'breach':
+                m['prevented_breaches'] += 1
+            else:
+                m['false_rejections'] += 1
             if policy.reputation:
                 s.successes = 0
                 if policy.exclude:
@@ -187,12 +215,15 @@ def simulate(config: Config, tape: tuple[Event, ...], policy: Policy) -> dict:
         m['production_cost'] += config.production_cost
         completed = e.failure == 'none'
         if not completed and policy.repair:
-            # Paid diagnosis; only evidenced accidents are eligible for a retry.
+            # A false accident diagnosis wastes retry resources on an unrepairable breach.
             m['appeal_cost'] += config.appeal_cost
             m['appeals'] += 1
-            if e.failure == 'accident' and accurate:
+            diagnosed = accurate if e.failure == 'accident' else e.diagnosis_false_draw < config.false_positive_rate
+            if diagnosed:
                 m['repair_cost'] += config.repair_cost
-                completed = e.repair_draw < config.repair_success
+                if e.failure == 'breach':
+                    m['wasted_retries'] += 1
+                completed = e.failure == 'accident' and e.repair_draw < config.repair_success
                 if completed:
                     m['repairs'] += 1
         if completed:
@@ -281,7 +312,7 @@ def run_suite(out: Path, seeds: int, opportunities: int) -> None:
                '- Provider breach propensities persist within a run; the uniform_reliability control removes heterogeneity. Identity resets erase public history but preserve latent propensity.',
                '- Policies are fixed rules. No language models, strategic learning, voluntary institutional choice, or conscious populations are instantiated.',
                '- Failure events are exogenous. An adaptive attacker may react to policy; this replay cannot measure that.',
-               '- Scope checks have known false negatives but no false positives; repair diagnoses have false negatives but no false positives. Both assumptions favor the corresponding interventions.',
+               '- This baseline sets false_positive_rate to zero. The separate robustness study varies false positives; see studies/ROBUSTNESS_PLAN.md.',
                '- Commitments currently add cost only. Their independent benefit is unmodeled, so this is not a test of commitment semantics.',
                '- Reputation uses provider identity and bounded exclusion. There is no authenticated identity, decentralization, insolvency, restitution transfer, or enforcement model.',
                '- Parameter regimes are illustrative stress cases, not a representative sample of future environments.',
